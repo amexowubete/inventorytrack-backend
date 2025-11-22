@@ -1,9 +1,11 @@
+// index.js
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
+const fs = require('fs');
 
 const prisma = new PrismaClient();
 const app = express();
@@ -12,16 +14,48 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 4000;
 
-// Serve Swagger UI from backend/swagger.yaml
-const swaggerDocument = YAML.load(path.join(__dirname, '..', 'swagger.yaml'));
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+// Try multiple likely locations for swagger.yaml so deployment folders don't break us.
+const possibleSwaggerPaths = [
+  path.join(__dirname, 'swagger.yaml'),        // when index.js is in repo root
+  path.join(__dirname, 'src', 'swagger.yaml'),// when index.js is in root but swagger in src
+  path.join(__dirname, '..', 'swagger.yaml'), // when index.js is in src folder
+  path.join(process.cwd(), 'swagger.yaml')     // fallback to process cwd
+];
+
+let swaggerDocument = null;
+let swaggerPathFound = null;
+
+for (const p of possibleSwaggerPaths) {
+  if (fs.existsSync(p)) {
+    try {
+      swaggerDocument = YAML.load(p);
+      swaggerPathFound = p;
+      console.log('Loaded swagger from', p);
+      break;
+    } catch (err) {
+      console.warn('Found swagger at', p, 'but failed to parse it:', err.message);
+    }
+  }
+}
+
+if (swaggerDocument) {
+  app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+} else {
+  // If swagger not found, provide a small placeholder route so the server doesn't crash
+  app.get('/docs', (req, res) => {
+    res.status(200).send({
+      message: 'Swagger file not found on server. API is still running. Please check repository for swagger.yaml'
+    });
+  });
+  console.warn('Swagger YAML not found in any expected path:', possibleSwaggerPaths);
+}
 
 // Health
 app.get('/', (req, res) => {
-  res.send({ status: 'ok', message: 'InventoryTrack backend' });
+  res.json({ status: 'ok', message: 'InventoryTrack backend' });
 });
 
-// Products endpoints
+// -- Products endpoints (unchanged) --
 app.get('/products', async (req, res) => {
   try {
     const products = await prisma.product.findMany({ orderBy: { id: 'asc' } });
@@ -98,4 +132,5 @@ app.get('/transactions', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`InventoryTrack backend listening on port ${PORT}`);
+  if (swaggerPathFound) console.log('Swagger served from:', swaggerPathFound);
 });
